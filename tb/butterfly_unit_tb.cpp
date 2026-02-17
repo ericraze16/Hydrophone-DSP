@@ -1,55 +1,73 @@
 #include "Vbutterfly_unit.h"
 #include "verilated.h"
-#include "verilated_vcd_c.h"
-#include <vector>
 #include <iostream>
+#include <iomanip>
 #include <cmath>
+#include <vector>
+
+// Fixed-point scale factor (Q1.15)
+const int SCALE = 32768;
+
+struct TestCase {
+    std::string name;
+    int a_re, a_im, b_re, b_im;
+    double w_re_f, w_im_f;
+};
+
+void run_test(Vbutterfly_unit* top, TestCase tc) {
+    // 1. Setup inputs
+    top->rst_n = 0; top->clk = 0; top->eval();
+    top->rst_n = 1; top->clk = 1; top->eval(); // Reset pulse
+
+    top->a_re = tc.a_re; top->a_im = tc.a_im;
+    top->b_re = tc.b_re; top->b_im = tc.b_im;
+    top->w_re = (int)(tc.w_re_f * (SCALE - 1)); 
+    top->w_im = (int)(tc.w_im_f * (SCALE - 1));
+    top->en = 1;
+    top->valid_in = 1;
+
+    // 2. Run for LATENCY + 1 cycles
+    for (int i = 0; i < 5; i++) {
+        top->clk = 0; top->eval();
+        top->clk = 1; top->eval();
+    }
+
+    // 3. Print Results
+    std::cout << "TEST: " << tc.name << std::endl;
+    std::cout << "  Input A: (" << tc.a_re << " + " << tc.a_im << "j)" << std::endl;
+    std::cout << "  Input B: (" << tc.b_re << " + " << tc.b_im << "j) rotated by " << tc.w_re_f << " + " << tc.w_im_f << "j" << std::endl;
+    std::cout << "  Result A: (" << (int16_t)top->out_a_re << " + " << (int16_t)top->out_a_im << "j)" << std::endl;
+    std::cout << "  Result B: (" << (int16_t)top->out_b_re << " + " << (int16_t)top->out_b_im << "j)" << std::endl;
+    std::cout << "-------------------------------------------" << std::endl;
+}
 
 int main(int argc, char** argv) {
-    std::cout << "Starting Butterfly Unit Testbench" << std::endl;
-
     Verilated::commandArgs(argc, argv);
     Vbutterfly_unit* top = new Vbutterfly_unit;
 
-    // Fixed-point scale factor (2^15)
-    const int SCALE = 32768;
+    std::vector<TestCase> tests = {
+        // Simple Add/Sub (W = 1 + 0j)
+        {"Identity (Sum/Diff)", 1000, 0, 500, 0, 1.0, 0.0}, 
+            
+        // 90 degree rotation (W = 0 + 1j)
+        // B(500+0j) * W(0+1j) = (0 + 500j)
+        // OutA = (1000+0j) + (0+500j) = 1000 + 500j
+        {"90 deg Rotation", 1000, 0, 500, 0, 0.0, 1.0},
 
-    // Test Case: Rotate 45 degrees
-    // B = 1000 + 0j
-    // W = cos(45) + j sin(45) -> 0.707 + 0.707j
-    top->a_re = 5000; top->a_im = 0;   // A point
-    top->b_re = 1000; top->b_im = 0;   // B point
-    top->w_re = 0.707 * SCALE;         // Twiddle Real
-    top->w_im = 0.707 * SCALE;         // Twiddle Imag
-    top->rst_n = 0;
-    top->valid_in = 1;
-    top->en = 1;
+        // Full Cancellation
+        // A=500, B=500, W=1 -> OutB should be 0
+        {"Perfect Cancellation", 500, 0, 500, 0, 1.0, 0.0},
 
+        // Max Negative Values (Check 2's complement)
+        {"Negative Logic", -1000, 0, -500, 0, 1.0, 0.0},
 
-    // Initialize Tracing
-    Verilated::traceEverOn(true);
-    VerilatedVcdC* tfp = new VerilatedVcdC;
-    top->trace(tfp, 99); // Trace 99 levels of hierarchy
-    tfp->open("waveform.vcd");
+        // Potential Overflow Case
+        // 30000 + 30000 = 60000 (Should wrap or clip in 16-bit)
+        {"Overflow Check", 30000, 0, 30000, 0, 1.0, 0.0}
+    };
 
-    int time = 0;
-
-
-    for (int i = 0; i < 100; i++) {
-        if (i == 2) top->rst_n = 1; // Release reset after 2 cycles
-        
-        top->clk = 0; top->eval();
-        top->clk = 1; top->eval();
-        tfp->dump(time++);
-
-        // if (top->valid_out) {
-            std::cout << "Cycle " << i << " Output Ready!" << std::endl;
-            std::cout << "Inputs: " << top->a_re << " + " << top->a_im << "j, "
-                      << top->b_re << " + " << top->b_im << "j, W: "
-                      << top->w_re << " + " << top->w_im << "j" << std::endl;
-            std::cout << "Out A: " << top->out_a_re << " + " << top->out_a_im << "j" << std::endl;
-            std::cout << "Out B: " << top->out_b_re << " + " << top->out_b_im << "j" << std::endl;
-        // }
+    for (const auto& tc : tests) {
+        run_test(top, tc);
     }
 
     delete top;

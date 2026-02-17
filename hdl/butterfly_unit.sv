@@ -62,15 +62,31 @@ module butterfly_unit #(
         end
     end
 
-    // --- Pipeline Stage 3: The Final Addition/Subtraction ---
-    // This maps to the DSP48 Post-Adder (PREG)
+   // --- Pipeline Stage 3: The Final Addition/Subtraction with Scaling ---
+    
+    // Use 17 bit accumulator when adding 16 bit numbers
+    logic signed [WIDTH:0] next_a_re, next_a_im;
+    logic signed [WIDTH:0] next_b_re, next_b_im;
+
+    always_comb begin
+        next_a_re = a_re_d2 + twid_re;
+        next_a_im = a_im_d2 + twid_im;
+        next_b_re = a_re_d2 - twid_re;
+        next_b_im = a_im_d2 - twid_im;
+    end
+
+    // --- Pipeline Stage 3: The Registers ---
+    // This is the actual flip-flop stage that holds the value for the next part of the FFT
     always_ff @(posedge clk) begin
         if (!rst_n) begin
+            out_a_re <= '0; out_a_im <= '0;
+            out_b_re <= '0; out_b_im <= '0;
         end else if (en) begin
-            out_a_re  <= a_re_d2 + twid_re;
-            out_a_im  <= a_im_d2 + twid_im;
-            out_b_re  <= a_re_d2 - twid_re;
-            out_b_im  <= a_im_d2 - twid_im;
+            // Account for 17 bit accumulator by right shifting 1
+            out_a_re <= WIDTH'(next_a_re >>> 1);
+            out_a_im <= WIDTH'(next_a_im >>> 1);
+            out_b_re <= WIDTH'(next_b_re >>> 1);
+            out_b_im <= WIDTH'(next_b_im >>> 1);
         end
     end
 
