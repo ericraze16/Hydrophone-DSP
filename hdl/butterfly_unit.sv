@@ -6,7 +6,7 @@ module butterfly_unit #(
     input  logic rst_n,
     input  logic en,
     
-    // Data inputs (A and B points)
+    // A and B complex valued points
     input  logic signed [WIDTH-1:0] a_re, a_im,
     input  logic signed [WIDTH-1:0] b_re, b_im,
     
