@@ -14,31 +14,73 @@ struct TestCase {
     double w_re_f, w_im_f;
 };
 
-void run_test(Vbutterfly_unit* dut, TestCase tc) {
-    // 1. Setup inputs
-    dut->rst_n = 0; dut->clk = 0; dut->eval();
-    dut->rst_n = 1; dut->clk = 1; dut->eval(); // Reset pulse
+// Fixed point math gives quantization errors
+bool is_close(int actual, int expected, int tolerance = 2) {
+    return std::abs(actual - expected) <= tolerance;
+}
 
+void run_test(Vbutterfly_unit* dut, TestCase tc) {
+    // --- 1. Stimulus ---
+    dut->rst_n = 0; dut->clk = 0; dut->eval();
+    dut->rst_n = 1; dut->eval(); // De-assert reset
+    
+    // Apply inputs
     dut->a_re = tc.a_re; dut->a_im = tc.a_im;
     dut->b_re = tc.b_re; dut->b_im = tc.b_im;
-    dut->w_re = (int)(tc.w_re_f * (SCALE - 1)); 
-    dut->w_im = (int)(tc.w_im_f * (SCALE - 1));
+    dut->w_re = (int)std::round(tc.w_re_f * (SCALE - 1)); 
+    dut->w_im = (int)std::round(tc.w_im_f * (SCALE - 1));
     dut->en = 1;
     dut->valid_in = 1;
 
-    // 2. Run for LATENCY + 1 cycles
-    for (int i = 0; i < 5; i++) {
-        dut->clk = 0; dut->eval();
-        dut->clk = 1; dut->eval();
+    // --- 2. Step through Latency ---
+    // Note: We toggle clk here. Ensure inputs stay stable if DUT is registered
+    for (int i = 0; i < 6; i++) {
+        dut->clk = !dut->clk;
+        dut->eval();
     }
 
-    // 3. Print Results
-    std::cout << "TEST: " << tc.name << std::endl;
-    std::cout << "  Input A: (" << tc.a_re << " + " << tc.a_im << "j)" << std::endl;
-    std::cout << "  Input B: (" << tc.b_re << " + " << tc.b_im << "j) rotated by " << tc.w_re_f << " + " << tc.w_im_f << "j" << std::endl;
-    std::cout << "  Result A: (" << (int16_t)dut->out_a_re << " + " << (int16_t)dut->out_a_im << "j)" << std::endl;
-    std::cout << "  Result B: (" << (int16_t)dut->out_b_re << " + " << (int16_t)dut->out_b_im << "j)" << std::endl;
-    std::cout << "-------------------------------------------" << std::endl;
+    // --- 3. Calculate Expected (The Golden Model) ---
+    // DIF Math:
+    // sum = A + B
+    // diff = A - B
+    // A_out = sum / 2
+    // B_out = (diff * W) / SCALE
+    
+    int sum_re = tc.a_re + tc.b_re;
+    int sum_im = tc.a_im + tc.b_im;
+    int exp_a_re = sum_re >> 1;
+    int exp_a_im = sum_im >> 1;
+
+    int diff_re = tc.a_re - tc.b_re;
+    int diff_im = tc.a_im - tc.b_im;
+    int w_re_int = (int)std::round(tc.w_re_f * (SCALE - 1));
+    int w_im_int = (int)std::round(tc.w_im_f * (SCALE - 1));
+
+    // Complex Multiply: (dr + jdi) * (wr + jwi)
+    // Re: (dr*wr - di*wi), Im: (dr*wi + di*wr)
+    long long prod_re = ((long long)diff_re * w_re_int) - ((long long)diff_im * w_im_int);
+    long long prod_im = ((long long)diff_re * w_im_int) + ((long long)diff_im * w_re_int);
+    
+    int exp_b_re = (int)(prod_re >> 15);
+    int exp_b_im = (int)(prod_im >> 15);
+
+    // --- 4. Comparison ---
+    int actual_a_re = (int16_t)dut->out_a_re;
+    int actual_a_im = (int16_t)dut->out_a_im;
+    int actual_b_re = (int16_t)dut->out_b_re;
+    int actual_b_im = (int16_t)dut->out_b_im;
+
+    bool pass = is_close(actual_a_re, exp_a_re) && is_close(actual_a_im, exp_a_im) &&
+                is_close(actual_b_re, exp_b_re) && is_close(actual_b_im, exp_b_im);
+
+    // --- 5. Print Results ---
+    std::cout << (pass ? "[PASS] " : "[FAIL] ") << tc.name << std::endl;
+    if (!pass) {
+        std::cout << "   Expected A: (" << exp_a_re << " + " << exp_a_im << "j)" << std::endl;
+        std::cout << "   Actual A:   (" << actual_a_re << " + " << actual_a_im << "j)" << std::endl;
+        std::cout << "   Expected B: (" << exp_b_re << " + " << exp_b_im << "j)" << std::endl;
+        std::cout << "   Actual B:   (" << actual_b_re << " + " << actual_b_im << "j)" << std::endl;
+    }
 }
 
 int main(int argc, char** argv) {
@@ -68,6 +110,19 @@ int main(int argc, char** argv) {
 
     for (const auto& tc : tests) {
         run_test(dut, tc);
+    }
+
+    for (int i = 0; i < 100; i++) {
+        TestCase random_test = {
+            "Random_" + std::to_string(i),
+            (rand() % 20000) - 10000, // Random A
+            (rand() % 20000) - 10000, 
+            (rand() % 20000) - 10000, // Random B
+            (rand() % 20000) - 10000,
+            ((rand() % 2000) - 1000) / 1000.0, // Random W real (-1.0 to 1.0)
+            ((rand() % 2000) - 1000) / 1000.0  // Random W imag
+        };
+        run_test(dut, random_test);
     }
 
     delete dut;
